@@ -1,0 +1,16 @@
+{
+  "domain": "anova_mini",
+  "name": "Anova Precision Cooker Mini",
+  "version": "1.0.0",
+  "codeowners": [],
+  "requirements": [],
+  "dependencies": ["bluetooth"],
+  "bluetooth": [
+    {
+      "service_uuid": "910772a8-a5e7-49a7-bc6d-701e9a783a5c"
+    }
+  ],
+  "config_flow": true,
+  "documentation": "https://developer.anovaculinary.com/docs/devices/mini/api-reference",
+  "iot_class": "local_polling"
+}

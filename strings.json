@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Anova Precision Cooker Mini",
+        "description": "{description}",
+        "data": {
+          "address": "Device",
+          "manual_mac": "MAC Address"
+        }
+      },
+      "confirm": {
+        "title": "Anova Precision Cooker Mini",
+        "description": "Add Anova Mini at {address} to Home Assistant?"
+      }
+    },
+    "abort": {
+      "already_configured": "Device is already configured."
+    }
+  }
+}
