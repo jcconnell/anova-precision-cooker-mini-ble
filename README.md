@@ -35,6 +35,8 @@ A custom Home Assistant integration for the **Anova Precision Cooker Mini (Gen 3
 
 ### HACS (recommended)
 
+[HACS](https://hacs.xyz) must be installed in your Home Assistant instance.
+
 1. Open HACS in Home Assistant.
 2. Click **Custom Repositories** and add:
    - **URL**: `https://github.com/jcconnell/anova-precision-cooker-mini-ble`
@@ -92,6 +94,8 @@ The device clock must be set on every connection. All writes use `response=False
 
 - [Anova Developer Docs — Mini Implementation Example](https://developer.anovaculinary.com/docs/devices/mini/implementation-example)
 - [Anova Culinary Developer Project (GitHub)](https://github.com/anova-culinary/developer-project-mini)
+- [HACS — Home Assistant Community Store](https://hacs.xyz)
+- [ESPHome Bluetooth Proxy](https://esphome.io/components/bluetooth_proxy.html)
 
 ## License
 
