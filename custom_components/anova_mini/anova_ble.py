@@ -64,7 +64,7 @@ class AnovaMiniClient:
             # Cache system info once per connection
             try:
                 self.system_info = await self._read(CHAR_SYSTEM_INFO)
-                _LOGGER.info("System info: %s", self.system_info)
+                _LOGGER.debug("System info: %s", self.system_info)
             except Exception as e:
                 _LOGGER.warning("Could not read system info: %s", e)
 
@@ -72,7 +72,7 @@ class AnovaMiniClient:
             try:
                 state = await self._read(CHAR_STATE)
                 self.reported_unit = state.get("temperatureUnit", "C").upper()
-                _LOGGER.info("Device state on connect: %s", state)
+                _LOGGER.debug("Device state on connect: %s", state)
             except Exception as e:
                 _LOGGER.warning("Could not read initial state: %s", e)
 
@@ -104,7 +104,7 @@ class AnovaMiniClient:
         if not self.is_connected:
             raise RuntimeError("Not connected")
         data = _encode(payload)
-        _LOGGER.info("BLE WRITE -> %s: %s", char_uuid[-8:], payload)
+        _LOGGER.debug("BLE WRITE -> %s: %s", char_uuid[-8:], payload)
         try:
             await asyncio.wait_for(
                 self._client.write_gatt_char(char_uuid, data, response=False),
@@ -126,7 +126,7 @@ class AnovaMiniClient:
                 timeout=READ_TIMEOUT,
             )
             decoded = _decode(raw)
-            _LOGGER.info("BLE READ <- %s: %s", char_uuid[-8:], decoded)
+            _LOGGER.debug("BLE READ <- %s: %s", char_uuid[-8:], decoded)
             return decoded
         except asyncio.TimeoutError:
             _LOGGER.error("BLE READ TIMEOUT <- %s", char_uuid[-8:])

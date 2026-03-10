@@ -105,7 +105,7 @@ class AnovaMiniClimate(ClimateEntity):
             if setpoint_c is not None:
                 self._attr_target_temperature = round(setpoint_c * 9 / 5 + 32, 1)
 
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Poll: current=%.1f°F target=%.1f°F | mode=%s | full_state=%s",
                 self._attr_current_temperature or 0,
                 self._attr_target_temperature or 0,

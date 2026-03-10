@@ -94,7 +94,7 @@ class AnovaMiniTargetTempSensor(SensorEntity):
                 raw = await self._client.get_setpoint()
                 if raw is not None:
                     self._attr_native_value = float(raw)
-                    _LOGGER.info("Target temp: %.2f°C", float(raw))
+                    _LOGGER.debug("Target temp: %.2f°C", float(raw))
                 else:
                     _LOGGER.warning("No setpoint returned from device")
             except Exception as e:
@@ -124,7 +124,7 @@ class AnovaMiniStateSensor(SensorEntity):
             self._attr_native_value = raw_state if raw_state else "unknown"
             # Keep all fields as attributes for debugging, including mode
             self._attr_extra_state_attributes = dict(full)
-            _LOGGER.info("Cook state set to: %r | full_state: %s", raw_state, full)
+            _LOGGER.debug("Cook state set to: %r | full_state: %s", raw_state, full)
         except Exception as e:
             _LOGGER.warning("Could not read cook state: %s", e)
             self._attr_native_value = "unavailable"

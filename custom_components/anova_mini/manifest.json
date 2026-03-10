@@ -2,7 +2,7 @@
   "domain": "anova_mini",
   "name": "Anova Precision Cooker Mini",
   "version": "1.0.0",
-  "codeowners": [],
+  "codeowners": ["@jcconnell"],
   "requirements": [],
   "dependencies": ["bluetooth"],
   "bluetooth": [
@@ -11,6 +11,7 @@
     }
   ],
   "config_flow": true,
-  "documentation": "https://developer.anovaculinary.com/docs/devices/mini/api-reference",
+  "documentation": "https://github.com/jcconnell/anova-precision-cooker-mini-ble",
+  "issue_tracker": "https://github.com/jcconnell/anova-precision-cooker-mini-ble/issues",
   "iot_class": "local_polling"
 }
