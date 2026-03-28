@@ -1,11 +1,9 @@
 """Anova Precision Cooker Mini - BLE Custom Integration."""
 from __future__ import annotations
 
-from homeassistant.components.bluetooth import async_ble_device_from_address
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady
 
 from .anova_ble import AnovaMiniClient
 
@@ -14,17 +12,13 @@ PLATFORMS = [Platform.CLIMATE, Platform.SENSOR, Platform.NUMBER, Platform.SELECT
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Anova Mini from a config entry."""
+    """Set up Anova Mini from a config entry.
+
+    The BLE device may not be in range at startup — that is expected.
+    The client connects lazily when the entity first tries to poll.
+    """
     address: str = entry.data["address"]
-
-    ble_device = async_ble_device_from_address(hass, address, connectable=True)
-    if ble_device is None:
-        raise ConfigEntryNotReady(
-            f"Could not find Anova Mini BLE device at {address}. "
-            "Make sure the device is powered on and in range."
-        )
-
-    client = AnovaMiniClient(ble_device)
+    client = AnovaMiniClient(address)
 
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = {"client": client}

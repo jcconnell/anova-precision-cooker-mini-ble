@@ -9,7 +9,6 @@ from datetime import datetime, timezone
 from typing import Any
 
 from bleak import BleakClient
-from bleak.backends.device import BLEDevice
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,8 +37,8 @@ def _decode(data: bytes | bytearray) -> dict:
 
 
 class AnovaMiniClient:
-    def __init__(self, ble_device: BLEDevice) -> None:
-        self._device = ble_device
+    def __init__(self, address: str) -> None:
+        self._address = address
         self._client: BleakClient | None = None
         self.reported_unit: str = "C"
         self.system_info: dict = {}
@@ -51,12 +50,12 @@ class AnovaMiniClient:
     async def connect(self) -> bool:
         try:
             self._client = BleakClient(
-                self._device,
+                self._address,
                 timeout=CONNECT_TIMEOUT,
                 disconnected_callback=self._on_disconnect,
             )
             await self._client.connect()
-            _LOGGER.info("Connected to Anova Mini %s", self._device.address)
+            _LOGGER.info("Connected to Anova Mini %s", self._address)
 
             # Set clock immediately on connect (required by protocol)
             await self._set_clock()
