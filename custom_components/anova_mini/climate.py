@@ -1,7 +1,6 @@
 """Climate entity for Anova Precision Cooker Mini."""
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any
@@ -14,17 +13,18 @@ from homeassistant.components.climate import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import ATTR_TEMPERATURE, UnitOfTemperature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .anova_ble import AnovaMiniClient
 from . import DOMAIN
+from .coordinator import AnovaMiniCoordinator
 from .number import get_timer_seconds
 
 _LOGGER = logging.getLogger(__name__)
 
 MIN_TEMP_F = 41.0
 MAX_TEMP_F = 210.0
-POLL_INTERVAL = 30
 COMMAND_LOCK_SECS = 20
 
 
@@ -33,11 +33,11 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    client: AnovaMiniClient = hass.data[DOMAIN][entry.entry_id]["client"]
-    async_add_entities([AnovaMiniClimate(client, entry)], True)
+    coordinator: AnovaMiniCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    async_add_entities([AnovaMiniClimate(coordinator, entry)], False)
 
 
-class AnovaMiniClimate(ClimateEntity):
+class AnovaMiniClimate(CoordinatorEntity, ClimateEntity):
     _attr_has_entity_name = True
     _attr_name = None
     _attr_hvac_modes = [HVACMode.OFF, HVACMode.HEAT]
@@ -47,8 +47,8 @@ class AnovaMiniClimate(ClimateEntity):
     _attr_max_temp = MAX_TEMP_F
     _attr_target_temperature_step = 0.5
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
         self._entry_id = entry.entry_id
         self._attr_unique_id = f"{entry.entry_id}_climate"
         self._attr_device_info = {
@@ -60,7 +60,6 @@ class AnovaMiniClimate(ClimateEntity):
         self._attr_hvac_mode = HVACMode.OFF
         self._attr_current_temperature: float | None = None
         self._attr_target_temperature: float | None = 135.0  # °F
-        self._poll_task: asyncio.Task | None = None
         self._command_time: datetime | None = None
 
     def _command_pending(self) -> bool:
@@ -71,83 +70,52 @@ class AnovaMiniClimate(ClimateEntity):
     def _mark_command(self) -> None:
         self._command_time = datetime.now(timezone.utc)
 
-    async def async_added_to_hass(self) -> None:
-        self._poll_task = self.hass.loop.create_task(self._startup())
-
-    async def _startup(self) -> None:
-        """Delayed startup: let HA register the entity, then connect and read temps only."""
-        await asyncio.sleep(5)
-        await self._poll_temperatures()
-        self.async_write_ha_state()
-        self._poll_task = self.hass.loop.create_task(self._poll_loop())
-
-    async def async_will_remove_from_hass(self) -> None:
-        if self._poll_task:
-            self._poll_task.cancel()
-        await self._client.disconnect()
-
-    async def _poll_temperatures(self) -> None:
-        """Read temperatures from device using get_full_state(). Never touches hvac_mode."""
-        try:
-            if not self._client.is_connected:
-                if not await self._client.connect():
-                    return
-
-            # get_full_state merges STATE + CURRENT_TEMP + TIMER in one logical read
-            full = await self._client.get_full_state()
-
-            current_temp_c = full.get("currentTemperature")
-            if current_temp_c:
-                self._attr_current_temperature = round(float(current_temp_c) * 9 / 5 + 32, 1)
-
-            # Setpoint lives in CHAR_SET_TEMPERATURE, not STATE
-            setpoint_c = await self._client.get_setpoint()
-            if setpoint_c is not None:
-                self._attr_target_temperature = round(setpoint_c * 9 / 5 + 32, 1)
-
-            _LOGGER.debug(
-                "Poll: current=%.1f°F target=%.1f°F | mode=%s | full_state=%s",
-                self._attr_current_temperature or 0,
-                self._attr_target_temperature or 0,
-                full.get("mode") or full.get("state"),
-                full,
-            )
-        except Exception as err:
-            _LOGGER.warning("Temperature poll failed: %s", err)
-            await self._client.disconnect()
-
-    async def _poll_loop(self) -> None:
-        while True:
-            await asyncio.sleep(POLL_INTERVAL)
-            if self.entity_id is None:
-                continue
-            if self._command_pending():
-                _LOGGER.debug("Skipping poll — within command lock window")
-                continue
-            await self._poll_temperatures()
+    def _handle_coordinator_update(self) -> None:
+        # Don't overwrite optimistic state during a command window
+        if self._command_pending():
             self.async_write_ha_state()
+            return
+
+        data = self.coordinator.data
+        if data is None:
+            self.async_write_ha_state()
+            return
+
+        current_c = data.get("current_temperature")
+        if current_c:
+            self._attr_current_temperature = round(float(current_c) * 9 / 5 + 32, 1)
+
+        setpoint_c = data.get("target_temperature")
+        if setpoint_c is not None:
+            self._attr_target_temperature = round(float(setpoint_c) * 9 / 5 + 32, 1)
+
+        self.async_write_ha_state()
+
+    async def _ensure_connected(self) -> None:
+        client = self.coordinator.client
+        if not client.is_connected:
+            if not await client.connect():
+                raise HomeAssistantError("Cannot reach Anova Mini — device is offline")
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
         """User-initiated on/off. hvac_mode is ONLY ever changed here, never by polls."""
         self._mark_command()
+        await self._ensure_connected()
 
-        if not self._client.is_connected:
-            if not await self._client.connect():
-                _LOGGER.error("Cannot set HVAC mode — device not reachable")
-                return
-
+        client = self.coordinator.client
         if hvac_mode == HVACMode.HEAT:
             setpoint_f = self._attr_target_temperature or 135.0
             setpoint_c = round((setpoint_f - 32) * 5 / 9, 2)
             timer_seconds = get_timer_seconds(self.hass.data[DOMAIN][self._entry_id])
             _LOGGER.info("Starting cook: %.1f°F → %.2f°C, timer=%ds", setpoint_f, setpoint_c, timer_seconds)
-            await self._client.start_cook(setpoint_c, timer_seconds)
+            await client.start_cook(setpoint_c, timer_seconds)
         else:
             _LOGGER.info("Stopping cook")
-            await self._client.stop_cook()
+            await client.stop_cook()
 
         self._attr_hvac_mode = hvac_mode
         self.async_write_ha_state()
+        await self.coordinator.async_request_refresh()
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
         temp = kwargs.get(ATTR_TEMPERATURE)
@@ -157,22 +125,16 @@ class AnovaMiniClimate(ClimateEntity):
         self._mark_command()
         self._attr_target_temperature = temp
 
-        if not self._client.is_connected:
-            if not await self._client.connect():
-                _LOGGER.error("Cannot set temperature — device not reachable")
-                return
+        await self._ensure_connected()
+        client = self.coordinator.client
 
         temp_c = round((temp - 32) * 5 / 9, 2)
-        await self._client.set_temperature(temp_c)
+        await client.set_temperature(temp_c)
 
-        # If already cooking, re-issue start to update the running setpoint
+        # Re-issue start to update the running setpoint if already cooking
         if self._attr_hvac_mode == HVACMode.HEAT:
             timer_seconds = get_timer_seconds(self.hass.data[DOMAIN][self._entry_id])
-            await self._client.start_cook(temp_c, timer_seconds)
+            await client.start_cook(temp_c, timer_seconds)
 
         self.async_write_ha_state()
-
-    async def async_update(self) -> None:
-        """Called by HA update coordinator — only poll temps, never hvac_mode."""
-        if not self._command_pending() and self.entity_id is not None:
-            await self._poll_temperatures()
+        await self.coordinator.async_request_refresh()

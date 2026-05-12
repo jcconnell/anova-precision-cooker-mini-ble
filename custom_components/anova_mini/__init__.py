@@ -6,6 +6,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .anova_ble import AnovaMiniClient
+from .coordinator import AnovaMiniCoordinator
 
 DOMAIN = "anova_mini"
 PLATFORMS = [Platform.CLIMATE, Platform.SENSOR, Platform.NUMBER, Platform.SELECT]
@@ -15,13 +16,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Anova Mini from a config entry.
 
     The BLE device may not be in range at startup — that is expected.
-    The client connects lazily when the entity first tries to poll.
+    The coordinator marks all entities unavailable until the first
+    successful fetch; no ConfigEntryNotReady is raised.
     """
     address: str = entry.data["address"]
     client = AnovaMiniClient(address)
+    coordinator = AnovaMiniCoordinator(hass, client)
+
+    # Best-effort initial fetch — failures leave entities unavailable, not broken.
+    await coordinator.async_refresh()
 
     hass.data.setdefault(DOMAIN, {})
-    hass.data[DOMAIN][entry.entry_id] = {"client": client}
+    hass.data[DOMAIN][entry.entry_id] = {"client": client, "coordinator": coordinator}
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

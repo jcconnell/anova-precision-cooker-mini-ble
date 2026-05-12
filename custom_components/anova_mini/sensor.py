@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -12,14 +13,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .anova_ble import AnovaMiniClient
 from . import DOMAIN
+from .coordinator import AnovaMiniCoordinator
 
 _LOGGER = logging.getLogger(__name__)
-
-# Cook states the device can report
-COOK_STATES = ["idle", "cooking", "preheating", "heating", "low water", "error"]
 
 
 def _device_info(entry: ConfigEntry) -> dict:
@@ -36,27 +35,26 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    client: AnovaMiniClient = hass.data[DOMAIN][entry.entry_id]["client"]
+    coordinator: AnovaMiniCoordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
     di = _device_info(entry)
 
     # Patch device_info with system_info once available
-    fw = client.system_info.get("firmwareVersion")
-    sn = client.system_info.get("serialNumber")
-    if fw:
+    system_info = coordinator.client.system_info
+    if fw := system_info.get("firmwareVersion"):
         di["sw_version"] = fw
-    if sn:
+    if sn := system_info.get("serialNumber"):
         di["serial_number"] = sn
 
     async_add_entities([
-        AnovaMiniTempSensor(client, entry, di),
-        AnovaMiniStateSensor(client, entry, di),
-        AnovaMiniTargetTempSensor(client, entry, di),
-        AnovaMiniTimerRemainingSensor(client, entry, di),
-        AnovaMiniFirmwareSensor(client, entry, di),
-    ], update_before_add=False)
+        AnovaMiniTempSensor(coordinator, entry, di),
+        AnovaMiniStateSensor(coordinator, entry, di),
+        AnovaMiniTargetTempSensor(coordinator, entry, di),
+        AnovaMiniTimerRemainingSensor(coordinator, entry, di),
+        AnovaMiniFirmwareSensor(coordinator, entry, di),
+    ], False)
 
 
-class AnovaMiniTempSensor(SensorEntity):
+class AnovaMiniTempSensor(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -64,17 +62,20 @@ class AnovaMiniTempSensor(SensorEntity):
     _attr_name = "Current Temperature"
     _attr_icon = "mdi:thermometer-water"
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry, device_info: dict) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry, device_info: dict) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_current_temp"
         self._attr_device_info = device_info
 
-    async def async_update(self) -> None:
-        if self._client.is_connected:
-            self._attr_native_value = await self._client.get_current_temperature()
+    def _handle_coordinator_update(self) -> None:
+        data = self.coordinator.data
+        if data is not None:
+            current_c = data.get("current_temperature")
+            self._attr_native_value = float(current_c) if current_c else None
+        self.async_write_ha_state()
 
 
-class AnovaMiniTargetTempSensor(SensorEntity):
+class AnovaMiniTargetTempSensor(CoordinatorEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TEMPERATURE
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
@@ -82,55 +83,40 @@ class AnovaMiniTargetTempSensor(SensorEntity):
     _attr_name = "Target Temperature"
     _attr_icon = "mdi:thermometer-chevron-up"
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry, device_info: dict) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry, device_info: dict) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_target_temp"
         self._attr_device_info = device_info
 
-    async def async_update(self) -> None:
-        if self._client.is_connected:
-            try:
-                # Setpoint lives in CHAR_SET_TEMPERATURE, not STATE
-                raw = await self._client.get_setpoint()
-                if raw is not None:
-                    self._attr_native_value = float(raw)
-                    _LOGGER.debug("Target temp: %.2f°C", float(raw))
-                else:
-                    _LOGGER.warning("No setpoint returned from device")
-            except Exception as e:
-                _LOGGER.warning("Target temp read failed: %s", e)
+    def _handle_coordinator_update(self) -> None:
+        data = self.coordinator.data
+        if data is not None:
+            raw = data.get("target_temperature")
+            self._attr_native_value = float(raw) if raw is not None else None
+        self.async_write_ha_state()
 
 
-class AnovaMiniStateSensor(SensorEntity):
+class AnovaMiniStateSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Cook State"
     _attr_icon = "mdi:pot-steam"
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry, device_info: dict) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry, device_info: dict) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_cook_state"
         self._attr_device_info = device_info
 
-    async def async_update(self) -> None:
-        if not self._client.is_connected:
+    def _handle_coordinator_update(self) -> None:
+        data = self.coordinator.data
+        if data is None:
             self._attr_native_value = "disconnected"
-            return
-        try:
-            # get_full_state merges STATE + CURRENT_TEMP + TIMER
-            full = await self._client.get_full_state()
-            # Device returns "mode" (e.g. "cook") not "state"
-            raw_state = (full.get("mode") or full.get("state") or "unknown").lower().strip()
-            # Ensure we never set None or empty string — HA treats those as "unknown"
-            self._attr_native_value = raw_state if raw_state else "unknown"
-            # Keep all fields as attributes for debugging, including mode
-            self._attr_extra_state_attributes = dict(full)
-            _LOGGER.debug("Cook state set to: %r | full_state: %s", raw_state, full)
-        except Exception as e:
-            _LOGGER.warning("Could not read cook state: %s", e)
-            self._attr_native_value = "unavailable"
+        else:
+            self._attr_native_value = data.get("mode") or "unknown"
+            self._attr_extra_state_attributes = dict(data.get("full_state", {}))
+        self.async_write_ha_state()
 
 
-class AnovaMiniTimerRemainingSensor(SensorEntity):
+class AnovaMiniTimerRemainingSensor(CoordinatorEntity, SensorEntity):
     """
     Timer remaining sensor. The device does not provide a live countdown —
     it returns {mode: idle|running|completed, initial: <seconds>}.
@@ -143,77 +129,65 @@ class AnovaMiniTimerRemainingSensor(SensorEntity):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_icon = "mdi:timer"
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry, device_info: dict) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry, device_info: dict) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_timer_remaining"
         self._attr_device_info = device_info
-        self._timer_start: float | None = None   # monotonic time when running started
-        self._timer_initial: int = 0             # initial seconds from device
+        self._timer_start: float | None = None
+        self._timer_initial: int = 0
         self._last_mode: str = "idle"
 
-    async def async_update(self) -> None:
-        if not self._client.is_connected:
+    def _handle_coordinator_update(self) -> None:
+        data = self.coordinator.data
+        if data is None:
+            self.async_write_ha_state()
             return
-        try:
-            import time
-            timer_data = await self._client.get_timer()
-            mode = timer_data.get("mode", "idle").lower()
-            initial = int(timer_data.get("initial", 0))
 
-            if mode == "running":
-                if self._last_mode != "running" or initial != self._timer_initial:
-                    # Timer just started or was reset — record start time
-                    self._timer_start = time.monotonic()
-                    self._timer_initial = initial
-                elapsed = int(time.monotonic() - self._timer_start) if self._timer_start else 0
-                remaining_secs = max(0, self._timer_initial - elapsed)
-                self._attr_native_value = round(remaining_secs / 60, 1)
-            elif mode == "completed":
-                self._attr_native_value = 0
-                self._timer_start = None
-            else:
-                # idle — no timer set or cleared
-                self._timer_start = None
+        timer_data = data.get("timer", {})
+        mode = timer_data.get("mode", "idle").lower()
+        initial = int(timer_data.get("initial", 0))
+
+        if mode == "running":
+            if self._last_mode != "running" or initial != self._timer_initial:
+                self._timer_start = time.monotonic()
                 self._timer_initial = initial
-                self._attr_native_value = round(initial / 60, 1) if initial else 0
+            elapsed = int(time.monotonic() - self._timer_start) if self._timer_start else 0
+            remaining_secs = max(0, self._timer_initial - elapsed)
+            self._attr_native_value = round(remaining_secs / 60, 1)
+        elif mode == "completed":
+            self._attr_native_value = 0
+            self._timer_start = None
+        else:
+            self._timer_start = None
+            self._timer_initial = initial
+            self._attr_native_value = round(initial / 60, 1) if initial else 0
 
-            self._last_mode = mode
-            self._attr_extra_state_attributes = {
-                "mode": mode,
-                "initial_minutes": round(initial / 60, 1) if initial else 0,
-            }
-            _LOGGER.debug("Timer: mode=%s initial=%ds remaining=%.1fmin",
-                         mode, initial, self._attr_native_value or 0)
-        except Exception as e:
-            _LOGGER.debug("Could not read timer: %s", e)
+        self._last_mode = mode
+        self._attr_extra_state_attributes = {
+            "mode": mode,
+            "initial_minutes": round(initial / 60, 1) if initial else 0,
+        }
+        self.async_write_ha_state()
 
 
-class AnovaMiniFirmwareSensor(SensorEntity):
+class AnovaMiniFirmwareSensor(CoordinatorEntity, SensorEntity):
     _attr_has_entity_name = True
     _attr_name = "Firmware Version"
     _attr_icon = "mdi:chip"
-    _attr_entity_registry_enabled_default = False  # hidden by default, diagnostic use
+    _attr_entity_registry_enabled_default = False
 
-    def __init__(self, client: AnovaMiniClient, entry: ConfigEntry, device_info: dict) -> None:
-        self._client = client
+    def __init__(self, coordinator: AnovaMiniCoordinator, entry: ConfigEntry, device_info: dict) -> None:
+        super().__init__(coordinator)
         self._attr_unique_id = f"{entry.entry_id}_firmware"
         self._attr_device_info = device_info
-        # Set from cached system_info immediately — no poll needed
-        self._attr_native_value = client.system_info.get("firmwareVersion", "unknown")
-        self._attr_extra_state_attributes = {
-            k: v for k, v in client.system_info.items()
-            if k != "firmwareVersion"
-        }
+        self._attr_native_value = coordinator.client.system_info.get("firmwareVersion", "unknown")
 
-    async def async_update(self) -> None:
-        # Only re-read if we don't have it yet
-        if self._attr_native_value == "unknown" and self._client.is_connected:
-            try:
-                info = await self._client.get_system_info()
-                self._client.system_info = info
-                self._attr_native_value = info.get("firmwareVersion", "unknown")
-                self._attr_extra_state_attributes = {
-                    k: v for k, v in info.items() if k != "firmwareVersion"
-                }
-            except Exception as e:
-                _LOGGER.debug("Could not read system info: %s", e)
+    def _handle_coordinator_update(self) -> None:
+        data = self.coordinator.data
+        if data is not None:
+            info = data.get("system_info", {})
+            self._attr_native_value = info.get("firmwareVersion", self._attr_native_value)
+            self._attr_extra_state_attributes = {
+                k: v for k, v in info.items() if k != "firmwareVersion"
+            }
+        self.async_write_ha_state()
